@@ -1,0 +1,20 @@
+folder = "comics/tog1"
+
+[[notes]]
+text = ""
+
+[notes.area]
+y = 463
+x = 174
+height = 110
+width = 140
+
+[[notes]]
+text = ""
+
+[notes.area]
+y = 553
+x = 244
+height = 83
+width = 209
+

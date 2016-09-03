@@ -1,157 +1,149 @@
 local dalgi = require("dalgi")
+local toml = require("toml")
+local utf8 = require("utf8")
+local comic_renderer = require("comic_renderer")
+local annotator = require("annotator")
+local page_scroller = require("page_scroller")
 
-local MOUSE_SCROLL_SPEED = 10
-local KEY_SCROLL_SPEED = 20
-
-local g_x = 0
-local g_y = 0
-local g_y_min = 0
-local g_total_image_height = 0
 local g_images = dalgi.Array:new()
-local g_areas = dalgi.Array:new()
-local g_is_dragging = false
-local g_dragged_area
-local g_cur_area
+local g_notes = dalgi.Array:new()
 local g_comic = ""
+local game
 
-local function update_title()
-    local pages = math.ceil(-g_y_min/love.graphics.getHeight())
-    local page = math.floor(-g_y / love.graphics.getHeight()) + 1
+local function update_title(content_height)
+    local pages = math.ceil(content_height/love.graphics.getHeight())
+    local page = math.floor((-game.y) / love.graphics.getHeight()) + 1
     local title = "ToonBubbler - '%s' - Page %d/%d"
     love.window.setTitle(title:format(g_comic, page, pages))
 end
 
-local function set_y(value)
-    g_y = math.min(math.max(value, g_y_min), 0)
-    update_title()
-end
-
-local function page_up()
-    set_y(g_y + love.graphics.getHeight())
-end
-
-local function page_down()
-    set_y(g_y - love.graphics.getHeight())
-end
-
-local BigImage = {}
-local PART_SIZE = 1024
-function BigImage:new(filepath)
-    local textures = {}
-    local data = love.image.newImageData(filepath)
-    local w, h = data:getDimensions()
-    --print(string.format("Big image at (%d, %d)", w, h))
-    local w_rem = w
-    local h_rem = h
-    while h_rem > 0 do
-        local y = h - h_rem
-        local ph = math.min(PART_SIZE, h_rem)
-        while w_rem > 0 do
-            local x = w - w_rem
-            local pw = math.min(PART_SIZE, w_rem)
-            --local s = "x y w h: [%d, %d, %d, %d]"
-            --print(s:format(x, y, pw, ph))
-            local surf = love.image.newImageData(pw, ph)
-            surf:paste(data, 0, 0, x, y, pw, ph)
-            local texture = love.graphics.newImage(surf)
-            table.insert(textures, {texture, x, y})
-            w_rem = w_rem - PART_SIZE
-        end
-        w_rem = w
-        h_rem = h_rem - PART_SIZE
-    end
-    self.__index = self
-    return setmetatable({
-        source = filepath,
-        textures = textures,
-        w = w,
-        h = h,
-    }, self)
-end
-
-function BigImage:draw(x, y)
-    for _, data in ipairs(self.textures) do
-        love.graphics.draw(data[1], x + data[2], y + data[3])
-    end
-end
-
-function load_comic(directory)
-    print("Loading '"..directory.."'...")
-    local images = {}
-    local pfile = io.popen('ls "'..directory..'"')
-    local i = 1
-    for filename in pfile:lines() do
-        print("- '"..filename.."'")
-        local filepath = directory.."/"..filename
-        --print("path: '"..filepath.."'")
-        local image = BigImage:new(filepath)
-        images[i] = image
-        i = i + 1
-    end
-    pfile:close()
-    print("Loaded!")
-    return images
-end
-
 function love.load()
+    game = dalgi.EntityGroup:new(0, 0)
+    game:overwrite_active_love_game()
     love.graphics.setBackgroundColor({255, 255, 255})
-    g_images:append(load_comic("tog0"))
-    local y_min = 0
-    for _, image in ipairs(g_images) do
-        y_min = y_min - image.h
-    end
-    g_total_image_height = -y_min
-    y_min = y_min + love.graphics.getHeight()
-    g_y_min = y_min
-    update_title()
-end
-
-function love.update()
-    if love.keyboard.isDown("up") then
-        set_y(g_y + KEY_SCROLL_SPEED)
-    elseif love.keyboard.isDown("down") then
-        set_y(g_y - KEY_SCROLL_SPEED)
-    end
-end
-
-function love.keypressed(key, scancode, is_repeat)
-    local cmd_down = love.keyboard.isDown("lgui", "rgui")
-    if key == "space" then
-        set_y(g_y - love.graphics.getHeight())
-    end
-    if cmd_down then
-        if key == "up" then
-            set_y(0)
-        elseif key == "down" then
-            set_y(g_y_min)
-        elseif key == "right" then
-            for i=1, 10, 1 do
-                page_down()
+    local content_height
+    if #arg > 1 then
+        local comic = arg[2]
+        local anno = annotator.Annotator:new(0, 0)
+        if comic:match(".toml$") then
+            print("Loading areas from '"..comic.."'")
+            local file = io.open(comic, "r")
+            local text = file:read("*a")
+            local data = toml.loads(text)
+            --dalgi.print(data)
+            for _, note in ipairs(data.notes) do
+                local rect = dalgi.Rect:from_table(note.area)
+                anno:add_note(rect, note.text)
             end
-        elseif key == "left" then
-            for i=1, 10, 1 do
-                page_up()
-            end
+            file:close()
+            g_comic = data.folder
+        else
+            g_comic = comic
         end
+        
+        local renderer = comic_renderer.ComicRenderer:new(0, 0, g_comic)
+        content_height = renderer:content_height()
+        
+        game:add(renderer)
+        game:add(anno, 2)
     else
-        if key == "right" then
-            page_down()
-        elseif key == "left" then
-            page_up()
-        end
+        print("Usage: love toonbubbler <comic dir | note file>")
+        love.event.quit()
+    end
+    
+    local scroller = page_scroller.PageScroller:new(
+        function ()
+            return game.y
+        end, 
+        function (value)
+            game.y = value
+            update_title(content_height)
+        end, 
+        content_height
+    )
+    game:add(scroller)
+    
+    local w, h = love.graphics.getDimensions()
+    love.window.setMode(w, h, {
+        resizable = true,
+    })
+
+    update_title(content_height)
+    
+    game:init()
+end
+
+local function save_file()
+    local filename = g_comic:match("[^/]+$")
+    local outfile = filename..".toml"
+    local file = io.open(outfile, "w")
+    file:write(toml.dumps({
+        folder = g_comic,
+        notes = g_notes,
+    }))
+    file:close()
+    print("Saved data to '"..outfile.."'")
+end
+
+function love.textinput( text )
+    if g_selected then
+        g_selected.text = g_selected.text .. text
     end
 end
 
-function love.wheelmoved(dx, dy)
-    set_y(g_y + dy * MOUSE_SCROLL_SPEED)
+function love.mousepressed( x, y, button, isTouch )
+    if button == 1 then
+        g_selector:start_drag(-game.x + x, -game.y + y)
+    elseif button == 2 then
+        local px = x + -game.x
+        local py = y + -game.y
+        for _, note in g_notes:iter_rev() do
+            if note.area:contains(px, py) then
+                --print("Selected rect #"..i)
+                g_selected = note
+                return
+            end
+        end
+        g_selected = nil
+    end
+end
+
+function love.mousemoved( x, y, dx, dy )
+    g_selector:update(-game.x + x, -game.y + y)
+end
+
+function love.mousereleased( x, y, button, isTouch )
+    g_selector:finish()
 end
 
 function love.draw()
-    local y_pos = g_y
+    local y_pos = game.y
     for _, image in ipairs(g_images) do
-        image:draw(g_x, y_pos)
+        image:draw(game.x, y_pos)
         y_pos = y_pos + image.h
     end
+    for _, note in ipairs(g_notes) do
+        local area = note.area
+        if note == g_selected then
+            love.graphics.setColor({})
+            
+        else
+            love.graphics.setColor({})
+            love.graphics.rectangle("fill", area.x + game.x, area.y + game.y, area.width, area.height)
+            love.graphics.setColor({})
+            love.graphics.rectangle("line", area.x + game.x, area.y + game.y, area.width, area.height)
+        end
+        
+    end
+    if g_selector.is_dragging then
+        local x, y, w, h = g_selector:get_rect()
+        
+        love.graphics.setColor(SELECTION_COLOR)
+        love.graphics.rectangle("fill", x + game.x, y + game.y, w, h)
+        love.graphics.setColor(SELECTION_BORDER_COLOR)
+        love.graphics.rectangle("line", x + game.x, y + game.y, w, h)
+    end
+    love.graphics.setColor({255, 255, 255})
 end
 
 --love.event.quit()
